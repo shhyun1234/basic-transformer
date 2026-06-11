@@ -6,64 +6,57 @@ from tqdm import tqdm
 
 
 def score_masking(seq, padding_mask):
+    PAD_ID = 0
     BOS_ID = 2
     EOS_ID = 3
     
-    return (seq != EOS_ID) & (seq != BOS_ID) & ~padding_mask
+    return (seq == EOS_ID) | (seq == BOS_ID) | padding_mask
 
 def BERTscore(model, ref: torch.Tensor, can: torch.Tensor, ref_padding_mask: torch.Tensor, can_padding_mask:torch.Tensor):
-    # Encoder-Decoder 구조이기 때문에 hidden state가 아닌 embedding 비교 / 적절한 선택인건가?
-    ref = ref.argmax(dim=-1)
-    can = can.argmax(dim=-1)
+    # Encoder-Decoder 구조이기 때문에 hidden state가 아닌 embedding 비교 / 적절한 선택인건가?   
+    # token이 True인 mask
     ref_mask = score_masking(ref, ref_padding_mask)
     can_mask = score_masking(can, can_padding_mask)
     
+    # -100 -> 0 / 같이 하는 김에 실제 단어 토큰 외 전부 pad 처리
+    ref = ref.masked_fill(ref_padding_mask, 0)
+    can = can.masked_fill(can_padding_mask, 0)
+    
     h1 = model.getting_dec_embedding(ref)
     h2 = model.getting_dec_embedding(can)
-    
     
     h1 = torch.nn.functional.normalize(h1, dim=-1)
     h2 = torch.nn.functional.normalize(h2, dim=-1)
     
     # [B, T_r, T_c]
-    bertscore = torch.bmm(h1, h2.transpose(1,2))
+    # cosine similarity
+    sim = torch.bmm(h1, h2.transpose(1,2))
     
-    precision_score = bertscore.max(dim=1).values
-    precision = (precision_score * can_mask).sum(dim=1) / can_mask.sum(dim=1)
+    # [B, T_r, 1]
+    ref_mask_3d = ref_mask.unsqueeze(2)
+    # [B, 1, T_c]
+    can_mask_3d = can_mask.unsqueeze(1)
     
-    recall_score = bertscore.max(dim=2).values
-    recall = (recall_score * ref_mask).sum(dim=1) / ref_mask.sum(dim=1)
+    # before max padding
+    sim = sim.masked_fill(ref_mask_3d, float('-inf'))
+    sim = sim.masked_fill(can_mask_3d, float('-inf'))
+    
+    precision_score = sim.max(dim=1).values
+    precision_score = precision_score.masked_fill(can_mask, 0.0)
+    precision = precision_score.sum(dim=1) / (~can_mask).sum(dim=1)
+    
+    recall_score = sim.max(dim=2).values
+    recall_score = recall_score.masked_fill(ref_mask, 0.0)
+    recall = recall_score.sum(dim=1) / (~ref_mask).sum(dim=1)
     
     # [B, 1]
-    f1score = 2*(precision * recall) / (precision + recall)
+    f1score = 2*(precision * recall) / (precision + recall + 1e-8)
     
     return f1score
 
-def TokenF1(ref: torch.Tensor, can: torch.Tensor, ref_padding_mask: torch.Tensor, can_padding_mask:torch.Tensor):
-    # [B, T, D] -> [B, T]
-    ref = ref.argmax(dim=-1)
-    can = can.argmax(dim=-1)
-    
-    ref_mask = score_masking(ref, ref_padding_mask)
-    can_mask = score_masking(can, can_padding_mask)
-    
-    
-    '''
-    
-    ref_count = torch.bincount(ref_tokens, minlength=30000)
-    can_count = torch.bincount(can_tokens, minlength=30000)
-    
-    tp = torch.minimum(ref_count, can_count).sum
-    
-    precision = tp / len(can_tokens)
-    recall = tp / len(ref_tokens)
-    
-    f1score = 2*(precision * recall) / (precision + recall)
-    
-    return f1score
-    '''
-
-def create_candidate(model, batch, device, criterion, vocab_size, max_len):
+@torch.no_grad()
+def create_candidate(model, batch, device, max_len):
+    PAD_ID = 0
     BOS_ID = 2
     EOS_ID = 3
     
@@ -78,7 +71,7 @@ def create_candidate(model, batch, device, criterion, vocab_size, max_len):
     finished = torch.zeros(batch_size, dtype=torch.bool, device=device)
     
     model.init_kv_cache(batch_size, forms, tags, device, enc_key_padding_mask=enc_mask)
-    for i in range(len(max_len)-1):
+    for i in range(max_len-1):
         
         output, _ = model.inference(
             dec_in=dec_in,
@@ -86,16 +79,16 @@ def create_candidate(model, batch, device, criterion, vocab_size, max_len):
         )
         
         dec_in = output.argmax(dim=-1)
+        dec_in[finished] = PAD_ID
         can = torch.concat([can, dec_in], dim=1)
-        finished |= (dec_in == EOS_ID)
+        finished |= (dec_in.squeeze(1) == EOS_ID)
         
         if finished.all():
             break
         
     can = can[:,1:]
-    eos_mask = (can == EOS_ID)
-    can_padding_mask = eos_mask.cumsum(dim=1) > 0
-    can_padding_mask &= ~eos_mask
+    can_padding_mask = (can == PAD_ID)
+
 
         
     return can, can_padding_mask
@@ -133,7 +126,7 @@ def model_validation(model, valid_dataloader, device, criterion=None, vocab_size
     model.eval()
     total_loss = torch.zeros((), device=device)
     
-    for batch in enumerate(tqdm(valid_dataloader)):
+    for batch in tqdm(valid_dataloader):
         loss = valid_model_pass(model, batch, device, criterion, vocab_size)
         total_loss += loss.detach()
     return (total_loss / len(valid_dataloader)).item()

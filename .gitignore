@@ -13,3 +13,6 @@ wheels/
 # directory
 /checkpoint/
 /data/
+
+# file
+use_model.ipynb

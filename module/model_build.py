@@ -209,19 +209,19 @@ class Encoder(nn.Module):
 
 # masking 추가
 class DecoderLayer(nn.Module):
-    def __init__(self, embed_dim, n_heads, ffn_dim, dropout, max_len, attn_kv_cache, cross_kv_cache):
+    def __init__(self, embed_dim, n_heads, ffn_dim, dropout, max_len, use_kv_cache):
         super().__init__()
         self.masked_attn_norm = nn.LayerNorm(embed_dim)
         self.enc_attn_norm = nn.LayerNorm(embed_dim)
         self.ffn_norm = nn.LayerNorm(embed_dim)
         
-        if attn_kv_cache:
+        if use_kv_cache:
             self.masked_attention = MultiHeadAttentionLayer(embed_dim=embed_dim, n_heads=n_heads, dropout=dropout, max_len=max_len, mask=False, attn_kv_cache=True)
         else:
             self.masked_attention = MultiHeadAttentionLayer(embed_dim=embed_dim, n_heads=n_heads, dropout=dropout, max_len=max_len, mask=True)
         
-        if cross_kv_cache:
-            self.enc_attention = MultiHeadAttentionLayer(embed_dim=embed_dim, n_heads=n_heads, dropout=dropout, max_len=max_len, cross_kv_cache=cross_kv_cache)
+        if use_kv_cache:
+            self.enc_attention = MultiHeadAttentionLayer(embed_dim=embed_dim, n_heads=n_heads, dropout=dropout, max_len=max_len, cross_kv_cache=True)
         else:
             self.enc_attention = MultiHeadAttentionLayer(embed_dim=embed_dim, n_heads=n_heads, dropout=dropout, max_len=max_len)
         
@@ -264,9 +264,9 @@ class DecoderLayer(nn.Module):
 
         return trg, attention
 class Decoder(nn.Module):
-    def __init__(self, embed_dim, output_dim, n_layers, n_heads, ffn_dim, dropout, embedding, max_len, attn_kv_cache, cross_kv_cache):
+    def __init__(self, embed_dim, output_dim, n_layers, n_heads, ffn_dim, dropout, embedding, max_len, use_kv_cache):
         super().__init__()
-        self.decoders = nn.ModuleList([DecoderLayer(embed_dim=embed_dim, n_heads=n_heads, ffn_dim=ffn_dim, dropout=dropout, max_len=max_len, attn_kv_cache=attn_kv_cache, cross_kv_cache=cross_kv_cache) 
+        self.decoders = nn.ModuleList([DecoderLayer(embed_dim=embed_dim, n_heads=n_heads, ffn_dim=ffn_dim, dropout=dropout, max_len=max_len, use_kv_cache=use_kv_cache) 
                                       for _ in range(n_layers)])
         self.linear = nn.Linear(embed_dim, output_dim, bias=False)
         self.linear.weight = embedding.embedding.weight # decoder input embedding과 weight tying

@@ -2,7 +2,7 @@ import torch
 from tqdm import tqdm
 import time
 from torch.amp import autocast
-from evaluate import model_validation
+from .evaluate import model_validation
 
 # 1. vram 한계로 인한 mixed precision, step 학습 추가
 # 2. 그래픽카드 병렬 사용을 위해 나중에 DDP 추가
@@ -104,25 +104,33 @@ def model_train(model, train_dataloader, valid_dataloader, optimizer, device, cr
         end_time = time.time()
         epochs_mins, epochs_secs = epoch_time(start_time, end_time)
         
-        val_loss = model_validation(model, valid_dataloader, device,criterion=criterion, vocab_size=vocab_size)
+        val_loss = model_validation(model, valid_dataloader, device, criterion=criterion, vocab_size=vocab_size)
 
         print(f"Epoch {epoch+1} | Time: {epochs_mins}m {epochs_secs}s | Train Loss: {avg_loss:.4f} | Valid Loss:{val_loss:.4f}")
-        save_checkpoint(model, optimizer, epoch, avg_loss, f"checkpoint/checkpoint_epoch_{epoch}.pt")
+        
+        checkpoint_path = f"checkpoint/checkpoint_epoch_{epoch+1}.pt"
+        save_checkpoint(model, optimizer, epoch, avg_loss, val_loss, scheduler, checkpoint_path)
+        
+        # 2번째 gpu에서 evaluation 동기화 지점
+        done_path = checkpoint_path.replace(".pt", ".done")
+        open(done_path, "w").close()
         
         if val_loss < best_val:
             best_val = val_loss
-            save_checkpoint(model, optimizer, epoch, avg_loss, f"checkpoint/best_model.pt")
+            save_checkpoint(model, optimizer, epoch, avg_loss, val_loss, scheduler, "checkpoint/best_model.pt")
                     
 
-    save_checkpoint(model, optimizer, epoch, avg_loss,  "checkpoint/final_model.pt")
+    save_checkpoint(model, optimizer, epoch, avg_loss, val_loss, scheduler, "checkpoint/final_model.pt")
     
     return avg_loss
 
 
-def save_checkpoint(model, optimizer, epoch, avg_loss, path):   
+def save_checkpoint(model, optimizer, epoch, train_loss, valid_loss, scheduler, path):   
     torch.save({
         "epoch": epoch,
-        "loss": avg_loss,
-        "model_state_dict": model.state_dict(),
+        "train_loss": train_loss,
+        "valid_loss": valid_loss,
+        "model_state_dict": model._orig_mod.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
     }, path)
