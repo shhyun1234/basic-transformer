@@ -28,6 +28,7 @@ class BucketBatchSampler(Sampler):
         rng = np.random.default_rng(self.seed + self.epoch)
         lengths = np.asarray(self.lengths)
         
+        # indices: index
         if self.shuffle:
             indices = rng.permutation(len(lengths))
         else:
@@ -37,12 +38,15 @@ class BucketBatchSampler(Sampler):
         batches = []
         for i in range(0, len(indices), self.pool_size):
             pool = indices[i:i + self.pool_size]
-            pool = pool[np.argsort(lengths[pool], kind='stable')]   # 풀 내부만 정렬
+            
+            # 풀 내부만 정렬
+            pool = pool[np.argsort(lengths[pool], kind='stable')]
             for j in range(0, len(pool), self.batch_size):
                 batches.append(pool[j:j + self.batch_size].tolist())
 
+        # 배치 순서 셔플
         if self.shuffle:
-            rng.shuffle(batches)                            # 배치 순서 셔플
+            rng.shuffle(batches)
 
         yield from batches
 
